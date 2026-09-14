@@ -1,2 +1,3 @@
 servidor/venv/
 servidor/.env
+ **/__pycache__/
