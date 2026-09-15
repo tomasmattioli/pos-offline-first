@@ -12,6 +12,7 @@ from app.database import Base
 from app.models.product import Product
 from app.models.user import User
 from app.models.cash_register import CashRegister
+from app.models.sale import Sale
 
 sys.path.append(os.getcwd())
 load_dotenv
