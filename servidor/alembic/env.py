@@ -14,6 +14,7 @@ from app.models.user import User
 from app.models.cash_register import CashRegister
 from app.models.sale import Sale
 from app.models.sale_detail import SaleDetail
+from app.models.pendig_operation import PendingOperation
 
 
 sys.path.append(os.getcwd())
