@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey
 from app.database import Base
+from sqlalchemy.orm import relationship
 
 class Sale(Base):
     __tablename__ = "sales"
@@ -9,3 +10,4 @@ class Sale(Base):
     cash_register_id = Column(Integer, ForeignKey("cash_registers.id"), nullable=False)
     time = Column(DateTime, nullable=False)
     total = Column(Numeric(10, 2), nullable=False)
+    items = relationship("SaleDetail", backref="sale")
