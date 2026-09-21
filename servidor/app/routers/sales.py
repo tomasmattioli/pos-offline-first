@@ -51,4 +51,13 @@ def create_sale(sale: SaleCreate, db:Session = Depends(get_db)):
     return new_sale
     
 
+@router.get("/sales/{sale_id}", response_model = SaleOut)
+def get_sale(sale_id: int, db: Session = Depends(get_db)):
+    sale = db.query(Sale).filter(Sale.id == sale_id).first()
+    if not sale:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Venta con id {sale_id} no encontrada"
+        )
+    return sale
 
