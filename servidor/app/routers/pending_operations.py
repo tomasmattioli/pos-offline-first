@@ -9,6 +9,9 @@ from app.models.sale import Sale
 from app.models.sale_detail import SaleDetail
 from app.models.user import User
 from app.models.cash_register import CashRegister
+from decimal import Decimal
+
+
 router = APIRouter()
 
 def save_operation(db: Session, operation: PendingOperationCreate, status: str) -> PendingOperation:
@@ -26,7 +29,7 @@ def create_pending_operation(operation: PendingOperationCreate, db: Session = De
     if existing:
         return existing
     try:
-        datos = json.loads(operation.payload)
+        datos = json.loads(operation.payload, parse_float=Decimal)
     except json.JSONDecodeError:
         return save_operation(db, operation, "rejected")
     
