@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
-from app.schemas.user import UserCreate, UserOut
-from app.security import hash_password
+from app.schemas.user import UserCreate, UserOut, UserLogin
+from app.security import hash_password, check_password
 
 router = APIRouter()
 
@@ -55,3 +55,12 @@ def delete_user(user_id: int, db: Session= Depends(get_db)):
     db.commit()
     return user
 
+@router.post("/login", response_model=UserOut)
+def login(credentials: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == credentials.username).first()
+    if not user or not check_password(credentials.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuario o contraseña incorrectos"
+        )
+    return user
