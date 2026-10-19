@@ -27,7 +27,7 @@ def get_product(product_id: int, db: Session= Depends(get_db)):
     return product
 
 
-@router.put("/product/{product_id}", response_model=ProductOut)
+@router.put("/products/{product_id}", response_model=ProductOut)
 def update_product(product_id: int,update_data:ProductCreate, db: Session = Depends(get_db)):
     product = db.query(Product).filter(Product.id == product_id).first()
     if not product:
@@ -43,7 +43,7 @@ def update_product(product_id: int,update_data:ProductCreate, db: Session = Depe
     db.refresh(product)
     return product
 
-@router.delete("/product/{product_id}", response_model=ProductOut)
+@router.delete("/products/{product_id}", response_model=ProductOut)
 def delete_product(product_id: int, db: Session = Depends(get_db)):
     product = db.query(Product).filter(Product.id == product_id).first()
     if not product:

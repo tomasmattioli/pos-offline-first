@@ -13,11 +13,15 @@ router = APIRouter()
 def create_sale(sale: SaleCreate, db:Session = Depends(get_db)):
     total = 0
     detalles_validados = []
+    pedido_por_producto = {}
     for item in sale.items:
         product = db.query(Product).filter(Product.id == item.product_id).first()
         if not product:
             raise HTTPException(status_code=404, detail=f"Producto con id {item.product_id} no encontrado")
-        if item.quantity > product.stock:
+        if item.quantity <= 0:
+            raise HTTPException(status_code=400, detail="Cantidad invalida")
+        pedido_por_producto[item.product_id] = pedido_por_producto.get(item.product_id, 0) + item.quantity
+        if pedido_por_producto[item.product_id] > product.stock:
             raise HTTPException(status_code=400, detail="Stock insuficiente")
         
         subtotal = product.price * item.quantity

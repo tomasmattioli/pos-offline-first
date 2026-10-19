@@ -2,15 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.pendig_operation import PendingOperation
-from app.schemas.pending_operation import PendingOperationCreate, PendingOperationOut
-import json
+from app.schemas.pending_operation import PendingOperationCreate, PendingOperationOut, PendingOperationPayload
+from pydantic import ValidationError
 from app.models.product import Product
 from app.models.sale import Sale
 from app.models.sale_detail import SaleDetail
 from app.models.user import User
 from app.models.cash_register import CashRegister
-from decimal import Decimal
-
 
 router = APIRouter()
 
@@ -22,18 +20,17 @@ def save_operation(db: Session, operation: PendingOperationCreate, status: str) 
     return new_operation
     
     
-        
 @router.post("/pending_operations", response_model= PendingOperationOut)
 def create_pending_operation(operation: PendingOperationCreate, db: Session = Depends(get_db)):
     existing = db.query(PendingOperation).filter(PendingOperation.operation_uuid == operation.operation_uuid).first()
     if existing:
         return existing
     try:
-        datos = json.loads(operation.payload, parse_float=Decimal)
-    except json.JSONDecodeError:
+        payload = PendingOperationPayload.model_validate_json(operation.payload)
+    except ValidationError:
         return save_operation(db, operation, "rejected")
-    
-    user = db.query(User).filter(User.id == datos["user_id"]).first()
+
+    user = db.query(User).filter(User.id == payload.user_id).first()
     if not user:
         return save_operation(db, operation, "rejected")
     cash_register = db.query(CashRegister).filter(CashRegister.id == operation.cash_register_id).first()
@@ -42,23 +39,25 @@ def create_pending_operation(operation: PendingOperationCreate, db: Session = De
     
     total = 0
     detalles_validados = []
+    pedido_por_producto = {}
     
-    for item in datos["items"]:
-        product = db.query(Product).filter(Product.id == item["product_id"]).first()
+    for item in payload.items:
+        product = db.query(Product).filter(Product.id == item.product_id).first()
         if not product:
             return save_operation(db, operation, "rejected")
-        if item["quantity"] > product.stock:
+        pedido_por_producto[item.product_id] = pedido_por_producto.get(item.product_id, 0) + item.quantity
+        if pedido_por_producto[item.product_id] > product.stock:
             return save_operation(db, operation, "rejected")
-        subtotal = product.price * item["quantity"]
+        subtotal = product.price * item.quantity
         total += subtotal
         detalles_validados.append({
-            "product_id": item["product_id"],
-            "quantity": item["quantity"],
+            "product_id": item.product_id,
+            "quantity": item.quantity,
             "unit_price": product.price
         })
     
     new_sale = Sale(
-        user_id = datos["user_id"],
+        user_id = payload.user_id,
         cash_register_id = operation.cash_register_id,
         total = total,
         time = operation.occurred_at
