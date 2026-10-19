@@ -1,3 +1,5 @@
 servidor/venv/
 servidor/.env
-**/__pycache__/
+caja/venv/
+caja/.env
+**/__pycache__/
