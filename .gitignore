@@ -2,4 +2,6 @@ servidor/venv/
 servidor/.env
 caja/venv/
 caja/.env
-**/__pycache__/
+caja/caja.db
+**/__pycache__/
+
