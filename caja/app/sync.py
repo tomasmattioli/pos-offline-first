@@ -72,21 +72,24 @@ def download_catalog(db: Session, timeout: int = 5) -> bool:
 
 def sync_pending(db: Session, timeout: int = 5) -> bool:
     """
-    Envía al servidor cada operación local en estado 'pending'.
+    Envía al servidor cada operación local en estado 'pending', en orden de inserción.
     Por cada operación:
-      - hace POST /pending_operations con los campos que el servidor espera.
-      - lee el status devuelto ('confirmed' o 'rejected') y lo persiste de inmediato.
-      - si el servidor devuelve 422 (body inválido por bug de la caja), marca la
-        operación como 'format_error' para sacarla de la cola sin fingir que fue
-        procesada correctamente.
-      - si la red cae, corta el bucle: no tiene sentido seguir si la conexión cayó.
+      - hace POST /pending_operations con los cuatro campos que el servidor espera.
+      - guarda el status recibido ('confirmed' o 'rejected') con commit inmediato.
+        Esto garantiza que si se corta la conexión a la mitad, el próximo intento
+        retoma desde la primera operación que sigue en 'pending'.
+      - 422: el body está malformado (bug de la caja). Se marca 'format_error' para
+        sacarlo de la cola sin perder la operación.
+      - 5xx o error de red: el servidor falló, pero la operación puede estar perfecta.
+        Se deja 'pending' y se corta el bucle. Retorna False para que quien llame
+        no intente bajar el catálogo.
 
-    Retorna True si todas las operaciones pendientes fueron procesadas, False si
-    hubo algún error de red o quedaron operaciones sin enviar.
+    Retorna True solo si todas las operaciones pendientes fueron procesadas.
     """
     operations = (
         db.query(PendingOperation)
         .filter(PendingOperation.status == "pending")
+        .order_by(PendingOperation.id)
         .all()
     )
 
@@ -115,8 +118,8 @@ def sync_pending(db: Session, timeout: int = 5) -> bool:
 
         if response.status_code == 422:
             # El servidor rechazó el formato del body — bug en la caja.
-            # Marcamos 'format_error' para sacar la operación del bloqueo
-            # de la cola sin fingir que fue aceptada o rechazada por el servidor.
+            # Se marca 'format_error': sale de la cola de pendientes sin
+            # fingir que el servidor la procesó.
             print(
                 f"[sync] Operación {op.operation_uuid} devolvió 422. "
                 "Body inválido — marcando como 'format_error'."
@@ -124,6 +127,15 @@ def sync_pending(db: Session, timeout: int = 5) -> bool:
             op.status = "format_error"
             db.commit()
             continue
+
+        if response.status_code >= 500:
+            # Error del servidor, no de la operación. Puede ser transitorio.
+            # Se deja 'pending' y se corta: reintentará en el próximo ciclo.
+            print(
+                f"[sync] El servidor respondió {response.status_code} para "
+                f"{op.operation_uuid}. Dejando 'pending' e interrumpiendo sync."
+            )
+            return False
 
         try:
             result = response.json()
