@@ -146,6 +146,13 @@ def sync_pending(db: Session, timeout: int = 5) -> bool:
             print(f"[sync] Respuesta no JSON del servidor para {op.operation_uuid}: {e}")
             return False
 
+        if not isinstance(result, dict):
+            print(
+                f"[sync] Respuesta JSON no es un diccionario para {op.operation_uuid}. "
+                "Interrumpiendo sync."
+            )
+            return False
+
         new_status = result.get("status")
         if new_status not in ("confirmed", "rejected"):
             print(
