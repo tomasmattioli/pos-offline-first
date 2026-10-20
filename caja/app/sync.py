@@ -20,8 +20,10 @@ def download_catalog(db: Session, timeout: int = 5) -> bool:
     sin interrumpir la caja.
 
     Limitación conocida (v1): los productos borrados en el servidor no se eliminan
-    de la base local. La caja los seguirá mostrando hasta un reinicio manual. Anotado
-    en README como deuda técnica.
+    de la base local. La caja los seguirá mostrando hasta que se reinicie la base.
+    Se dejó así para v1 por el costo de implementación y prueba del borrado
+    diferencial, no por riesgo de correr con operaciones pendientes (download_catalog
+    aborta antes de tocar nada si hay pendientes, así que ese caso no puede ocurrir).
     """
     pending_count = (
         db.query(PendingOperation)
@@ -80,9 +82,9 @@ def sync_pending(db: Session, timeout: int = 5) -> bool:
         retoma desde la primera operación que sigue en 'pending'.
       - 422: el body está malformado (bug de la caja). Se marca 'format_error' para
         sacarlo de la cola sin perder la operación.
-      - 5xx o error de red: el servidor falló, pero la operación puede estar perfecta.
-        Se deja 'pending' y se corta el bucle. Retorna False para que quien llame
-        no intente bajar el catálogo.
+      - cualquier código que no sea 200 ni 422 (5xx, 401, 404, 400 inesperado, etc.):
+        la operación se deja 'pending' y se corta el bucle. Ante un código desconocido
+        lo seguro es no marcar nada y no perder la venta.
 
     Retorna True solo si todas las operaciones pendientes fueron procesadas.
     """
@@ -128,11 +130,12 @@ def sync_pending(db: Session, timeout: int = 5) -> bool:
             db.commit()
             continue
 
-        if response.status_code >= 500:
-            # Error del servidor, no de la operación. Puede ser transitorio.
-            # Se deja 'pending' y se corta: reintentará en el próximo ciclo.
+        if response.status_code != 200:
+            # Cualquier código que no sea 200 ni 422 (5xx, 401, 404, 400 inesperado...).
+            # Ante un código desconocido lo seguro es no marcar nada:
+            # la operación queda 'pending' y reintentará en el próximo ciclo.
             print(
-                f"[sync] El servidor respondió {response.status_code} para "
+                f"[sync] Código inesperado {response.status_code} para "
                 f"{op.operation_uuid}. Dejando 'pending' e interrumpiendo sync."
             )
             return False
