@@ -8,11 +8,15 @@ load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 SERVER_URL = os.getenv("SERVER_URL", "http://127.0.0.1:8000")
 
-cash_register_id_raw = os.getenv("CASH_REGISTER_ID")
-if not cash_register_id_raw:
-    raise RuntimeError("Falta configurar CASH_REGISTER_ID en el archivo .env")
+def _get_required_int_env(var_name: str) -> int:
+    raw_value = os.getenv(var_name)
+    if not raw_value:
+        raise RuntimeError(f"Falta configurar {var_name} en el archivo .env")
+    try:
+        return int(raw_value)
+    except ValueError:
+        raise ValueError(f"{var_name} debe ser un entero válido, recibido: {raw_value}")
 
-try:
-    CASH_REGISTER_ID = int(cash_register_id_raw)
-except ValueError:
-    raise ValueError(f"CASH_REGISTER_ID debe ser un entero válido, recibido: {cash_register_id_raw}")
+
+CASH_REGISTER_ID = _get_required_int_env("CASH_REGISTER_ID")
+USER_ID = _get_required_int_env("USER_ID")
