@@ -29,29 +29,34 @@ def register_sale(
     if not items:
         return False, "La venta debe contener al menos un ítem.", None
 
-    # Validar cantidades individuales > 0
-    for product_id, quantity in items:
-        if not isinstance(quantity, Decimal):
-            try:
-                quantity = Decimal(str(quantity))
-            except Exception:
-                return (
-                    False,
-                    f"Cantidad inválida para el producto ID {product_id}: {quantity}.",
-                    None,
-                )
+    # 1. Validar y normalizar cantidades a Decimal en una lista nueva
+    items_normalizados: List[Tuple[int, Decimal]] = []
+    for product_id, raw_quantity in items:
+        try:
+            quantity = (
+                raw_quantity
+                if isinstance(raw_quantity, Decimal)
+                else Decimal(str(raw_quantity))
+            )
+        except Exception:
+            return (
+                False,
+                f"Cantidad inválida para el producto ID {product_id}: {raw_quantity}.",
+                None,
+            )
         if quantity <= Decimal(0):
             return (
                 False,
                 f"La cantidad para el producto ID {product_id} debe ser mayor a 0 (recibido: {quantity}).",
                 None,
             )
+        items_normalizados.append((product_id, quantity))
 
-    # Validar existencia de productos y acumular pedidos
+    # 2. Validar existencia de productos y acumular pedidos usando la lista normalizada
     pedido_por_producto: dict[int, Decimal] = {}
     productos_db: dict[int, Product] = {}
 
-    for product_id, quantity in items:
+    for product_id, quantity in items_normalizados:
         if product_id not in productos_db:
             product = db.query(Product).filter(Product.id == product_id).first()
             if not product:
@@ -66,7 +71,7 @@ def register_sale(
             pedido_por_producto.get(product_id, Decimal(0)) + quantity
         )
 
-    # Validar stock local disponible para cada producto pedido
+    # 3. Validar stock local disponible para cada producto pedido
     for product_id, total_pedido in pedido_por_producto.items():
         product = productos_db[product_id]
         stock_actual = to_decimal(product.stock)
@@ -78,38 +83,40 @@ def register_sale(
                 None,
             )
 
-    # Descontar stock local
-    for product_id, total_pedido in pedido_por_producto.items():
-        product = productos_db[product_id]
-        stock_actual = to_decimal(product.stock)
-        nuevo_stock = stock_actual - total_pedido
-        product.stock = to_text(nuevo_stock)
-
-    # Armar el payload para el servidor (cantidades como strings para evitar pérdida de precisión)
-    payload_data = {
-        "user_id": USER_ID,
-        "items": [
-            {"product_id": pid, "quantity": to_text(qty)}
-            for pid, qty in items
-        ],
-    }
-    payload_json = json.dumps(payload_data)
-
-    # Crear la operación en la cola
-    operation = PendingOperation(
-        operation_uuid=str(uuid.uuid4()),
-        cash_register_id=CASH_REGISTER_ID,
-        occurred_at=datetime.now(timezone.utc).isoformat(),
-        payload=payload_json,
-        status="pending",
-    )
-    db.add(operation)
-
-    # Único commit con rollback si algo falla
+    # 4. Modificar stock y encolar operación dentro de un bloque protegido con rollback
     try:
+        # Descontar stock local
+        for product_id, total_pedido in pedido_por_producto.items():
+            product = productos_db[product_id]
+            stock_actual = to_decimal(product.stock)
+            nuevo_stock = stock_actual - total_pedido
+            product.stock = to_text(nuevo_stock)
+
+        # Armar el payload para el servidor (cantidades como strings para evitar pérdida de precisión)
+        payload_data = {
+            "user_id": USER_ID,
+            "items": [
+                {"product_id": pid, "quantity": to_text(qty)}
+                for pid, qty in items_normalizados
+            ],
+        }
+        payload_json = json.dumps(payload_data)
+
+        # Crear la operación en la cola
+        operation = PendingOperation(
+            operation_uuid=str(uuid.uuid4()),
+            cash_register_id=CASH_REGISTER_ID,
+            occurred_at=datetime.now(timezone.utc).isoformat(),
+            payload=payload_json,
+            status="pending",
+        )
+        db.add(operation)
+
+        # Único commit
         db.commit()
         db.refresh(operation)
         return True, "Venta registrada con éxito.", operation
     except Exception as e:
         db.rollback()
         return False, f"Error al registrar la venta en la base de datos: {e}", None
+
