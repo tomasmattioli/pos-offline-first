@@ -1,21 +1,275 @@
 # POS Offline-First
 
-Sistema de punto de venta offline-first compuesto por un **servidor central** (FastAPI + PostgreSQL) y una o más terminales de **caja** (SQLite + SQLAlchemy).
+Sistema de Punto de Venta (POS) con arquitectura **Offline-First**, diseñado para operar en comercios minoristas donde la continuidad operativa es crítica.
 
-## Arquitectura y Decisiones de Diseño
+El sistema se compone de dos aplicaciones desacopladas:
+- **Servidor Central:** API REST construida con **FastAPI** y base de datos relacional **PostgreSQL**, encargada de la consolidación de ventas, inventario centralizado y catálogo maestro.
+- **Terminal de Caja:** Aplicación de consola (CLI) construida en **Python** con base de datos local embebida en **SQLite**, capaz de registrar ventas y descontar stock local de manera 100% autónoma ante cortes de conexión.
 
-### 1. Modelo de Identificación (`CASH_REGISTER_ID` y `USER_ID`)
-- `CASH_REGISTER_ID`: Identifica unívocamente la terminal física ante el servidor central.
-- `USER_ID`: En la versión 1 (v1), **`USER_ID` identifica a la caja/terminal en el servidor**, no a la persona física que atiende. La caja opera de forma autónoma y offline sin requerir autenticación de usuario por sesión contra el servidor (lo cual impediría vender si la caja inicia sin conexión).
+---
 
-### 2. Sincronización y Catálogo (`sync.py`)
-- **Protección de cola pendiente:** `download_catalog()` aborta inmediatamente si detecta operaciones en estado `pending` en la cola local. De no hacerlo, sobreescribiría el stock local con el del servidor, el cual aún no refleja las ventas locales no sincronizadas.
-- **Limitación en productos eliminados (v1):** Los productos borrados en el servidor no se eliminan de la base local en v1. Esto se definió así por el costo de desarrollo y pruebas de un algoritmo de borrado diferencial robusto, y no por riesgo de concurrencia con operaciones pendientes (dado que `download_catalog` aborta si hay pendientes).
-- **Idempotencia:** Cada operación genera un `operation_uuid` único en la caja (`PendingOperation`). Si una solicitud se procesa en el servidor pero la respuesta se pierde por un corte de red, el reintento de la caja enviará el mismo UUID y el servidor devolverá el estado ya confirmado sin duplicar ventas ni descontar stock extra.
-- **Unicidad de códigos de barras:** La unicidad de `barcode` (`unique=True`) es garantizada por el modelo en el servidor central (PostgreSQL). Dado que la base local de la caja es una réplica descargada desde el servidor, en la caja se consulta por `.first()`, evitando redundancias de validación o menús de desambiguación innecesarios.
+## 1. ¿Por qué existe este proyecto? (El problema)
 
-### 3. Registro de Ventas Locales (`sales.py`)
-- **Validación atómica:** Se valida que las cantidades sean mayores a 0, que los productos existan y que la suma acumulada por producto no supere el stock local disponible.
-- **Precisión monetaria y de stock:** Se utiliza `Decimal` para todos los cálculos. Para la serialización en JSON del payload (`PendingOperation`), las cantidades se convierten a texto (`str`), formato que el schema Pydantic del servidor interpreta como `Decimal` exacto sin pérdida de precisión de punto flotante.
-- **Transacción única:** La deducción de stock y la creación de la `PendingOperation` se realizan en la misma transacción SQLite con un único `commit` y `rollback` explícito ante cualquier falla.
-- **Discrepancia de precios offline (limitación v1):** El cajero cobra al cliente el precio del catálogo local al momento de la venta, mientras que el servidor procesa y asienta la venta con el precio vigente en el servidor en el momento de la sincronización. Si un precio se actualizó en el servidor mientras la caja operaba offline, existirá una discrepancia entre lo cobrado en caja y lo asentado en el servidor. En v1 se documenta como limitación conocida (a resolver en v2 incluyendo el precio unitario congelado dentro del payload de la venta).
+En un comercio minorista, un corte de suministro de internet no puede paralizar la atención al público ni la facturación. Las soluciones POS basadas exclusivamente en la nube ("Cloud-Only") fallan en este escenario: si se corta el enlace, no se puede cobrar, se generan colas y se pierde dinero.
+
+Este proyecto resuelve ese problema mediante una arquitectura **Offline-First**:
+1. La caja tiene una copia local del catálogo y de su stock en un archivo **SQLite** en el disco de la terminal.
+2. Cada venta se procesa localmente en milisegundos sin depender de la red, descontando el stock local y guardando la transacción en una cola de operaciones pendientes.
+3. Al restablecerse la conectividad, la caja sincroniza en diferido con el servidor central mediante transacciones idempotentes, asegurando que ninguna venta se pierda ni se duplique.
+
+---
+
+## 2. ¿Cómo funciona?
+
+### Flujo general
+
+```
++-----------------------------------------------------------------------+
+|                           TERMINAL DE CAJA                            |
+|                                                                       |
+|  [Cajero] ---> Escaneo de productos (Barcode o #ID)                   |
+|                   |                                                   |
+|                   v                                                   |
+|           Valida stock local en SQLite                                |
+|                   |                                                   |
+|                   v                                                   |
+|           Descuenta stock local y encola en 'pending_operations'       |
+|           (UUID único generado en caja + timestamp UTC)               |
++-----------------------------------------------------------------------+
+                                    |
+                         ¿Hay conexión a Internet?
+                                    |
+                  [SÍ]              |              [NO]
+                   v                |               v
++-----------------------------+     |     +-----------------------------+
+| Sincronización diferida     |     |     | Continúa vendiendo          |
+| POST /pending_operations    |<----+     | offline con stock local     |
++-----------------------------+           +-----------------------------+
+                |
+                v
++-----------------------------------------------------------------------+
+|                           SERVIDOR CENTRAL                            |
+|                                                                       |
+|  1. ¿UUID ya fue procesado?                                          |
+|     -> SÍ: Devuelve resultado ya guardado (Idempotencia).             |
+|     -> NO: Valida stock central acumulado en PostgreSQL.              |
+|                                                                       |
+|  2. ¿Hay stock central suficiente?                                    |
+|     -> SÍ: Crea 'Sale', 'SaleDetail', descuenta stock y marca         |
+|            la operación como 'confirmed'.                             |
+|     -> NO: Guarda la operación como 'rejected'.                       |
++-----------------------------------------------------------------------+
+                                    |
+                                    v
++-----------------------------------------------------------------------+
+|                      ACTUALIZACIÓN DE CATÁLOGO                        |
+|  Una vez vaciada la cola pendiente, la caja ejecuta:                  |
+|  GET /products -> Actualiza precios y stock real en la base local.    |
++-----------------------------------------------------------------------+
+```
+
+---
+
+## 3. Tecnologías y Justificación del Stack
+
+| Componente | Tecnologías | Justificación |
+| :--- | :--- | :--- |
+| **Servidor Central** | Python, FastAPI, PostgreSQL, SQLAlchemy, Alembic, Pydantic | **FastAPI** provee validación estricta de esquemas con Pydantic y documentación interactiva automática en `/docs` (los endpoints síncronos se delegan al threadpool de FastAPI). **PostgreSQL** garantiza transaccionalidad ACID y tipos numéricos exactos (`Numeric(10, 3)` para stock y `Numeric(10, 2)` para dinero). **Alembic** asegura migraciones de esquema reproducibles. |
+| **Terminal de Caja** | Python, SQLite, SQLAlchemy, Requests | **SQLite** es un motor embebido serverless que reside en un único archivo (`caja.db`), eliminando la necesidad de instalar o mantener motores de bases de datos pesados en cada PC de caja. Se utiliza **SQLAlchemy** con un tipado estricto: números como `String` en la DB y `Decimal` en memoria, evitando los errores de redondeo de punto flotante binario (`float`). |
+
+---
+
+## 4. Cómo levantar el proyecto
+
+### Prerrequisitos
+- Python 3.10 o superior instalado.
+- Servidor PostgreSQL activo con una base de datos creada (ej: `pos_central`).
+
+---
+
+### Paso 1: Configurar y levantar el Servidor
+
+1. Abrir una terminal y posicionarse en el directorio del servidor:
+   ```bash
+   cd servidor
+   ```
+
+2. Crear y activar un entorno virtual:
+   - **Windows:**
+     ```powershell
+     python -m venv venv
+     .\venv\Scripts\activate
+     ```
+   - **Linux / macOS:**
+     ```bash
+     python3 -m venv venv
+     source venv/bin/activate
+     ```
+
+3. Instalar dependencias:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Crear el archivo `.env` en la raíz de `servidor/`:
+   ```env
+   DB_URL=postgresql://postgres:tu_password@localhost:5432/pos_central
+   ```
+
+5. Ejecutar las migraciones para crear las tablas en PostgreSQL:
+   ```bash
+   alembic upgrade head
+   ```
+
+6. Iniciar la API con Uvicorn:
+   ```bash
+   uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+   ```
+    La documentación interactiva de Swagger quedará disponible en: `http://127.0.0.1:8000/docs`.
+
+7. **Primer uso — Carga inicial de datos:**
+   Antes de que la caja pueda operar, el servidor debe tener registrados al menos un usuario, una terminal de caja y productos en catálogo. Se pueden crear directamente desde la interfaz `/docs` (Swagger) o ejecutando un script en la consola de Python:
+   ```bash
+   python -c "
+   from app.database import SessionLocal
+   from app.models.user import User
+   from app.models.cash_register import CashRegister
+   from app.models.product import Product
+   from decimal import Decimal
+
+   db = SessionLocal()
+   u = User(name='Cajero 1', username='cajero1', password_hash='hash')
+   c = CashRegister(name='Caja Principal')
+   p1 = Product(name='Leche Entera 1L', price=Decimal('150.00'), stock=Decimal('50.000'), barcode='779123456789')
+   p2 = Product(name='Pan Criollo (kg)', price=Decimal('80.00'), stock=Decimal('20.000'), barcode=None)
+   db.add_all([u, c, p1, p2])
+   db.commit()
+   print(f'Creados: User ID={u.id}, CashRegister ID={c.id}, Productos ID={p1.id}, {p2.id}')
+   db.close()
+   "
+   ```
+
+8. **Ejecutar tests automatizados con pytest:**
+   El servidor cuenta con una suite completa de pruebas de integración con aislamiento transaccional (`SAVEPOINT`):
+   ```bash
+   # 1. Crear la base de test si aún no existe
+   python tests/create_test_db.py
+
+   # 2. Correr los tests
+   pytest tests/ -v
+   ```
+
+---
+
+### Paso 2: Configurar y levantar la Terminal de Caja
+
+1. Abrir **otra terminal** y posicionarse en el directorio de la caja:
+   ```bash
+   cd caja
+   ```
+
+2. Crear y activar el entorno virtual:
+   - **Windows:**
+     ```powershell
+     python -m venv venv
+     .\venv\Scripts\activate
+     ```
+   - **Linux / macOS:**
+     ```bash
+     python3 -m venv venv
+     source venv/bin/activate
+     ```
+
+3. Instalar dependencias:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Crear el archivo `.env` en la raíz de `caja/`:
+   ```env
+   SERVER_URL=http://127.0.0.1:8000
+   CASH_REGISTER_ID=1
+   USER_ID=1
+   ```
+   *(Nota: Asegurarse de que `CASH_REGISTER_ID` y `USER_ID` coincidan con los IDs creados en el servidor).*
+
+5. Iniciar la interfaz CLI interactiva:
+   ```bash
+   python -m app.main
+   ```
+
+6. **Primer arranque:** En el menú principal, seleccionar la opción `1. Sincronizar catálogo` para descargar el catálogo maestro de productos y stock desde el servidor central.
+
+### Ejemplo de uso de la CLI (Terminal de Caja)
+
+```text
+========================================
+       TERMINAL DE CAJA (CLI)
+========================================
+[1] Sincronizar catalogo
+[2] Registrar venta
+[3] Ver cola de operaciones pendientes
+[4] Salir
+Seleccione una opcion: 2
+
+--- REGISTRAR VENTA ---
+Ingrese codigo de barras o #ID (Enter vacio para finalizar): 779123456789
+  Producto : Leche Entera 1L
+  Precio   : $150.00
+  Stock    : 50.000
+  Cantidad : 2
+  -> Agregado: 2.000 x Leche Entera 1L ($300.00)
+
+Ingrese codigo de barras o #ID (Enter vacio para finalizar): 
+--- RESUMEN DE LA VENTA ---
+  2.000 x Leche Entera 1L ($150.00 c/u) = $300.00
+----------------------------------------
+TOTAL: $300.00
+----------------------------------------
+Confirmar venta? (s/n): s
+[EXITO] Venta registrada correctamente. Operacion guardada en cola local.
+
+Seleccione una opcion: 3
+--- OPERACIONES PENDIENTES ---
+  UUID: 4e99f... | Fecha: 2026-10-26 18:00:00 | Items: 1
+Total en cola: 1 operacion(es) pendiente(s).
+
+Seleccione una opcion: 1
+--- SINCRONIZACION ---
+Enviando ventas pendientes al servidor...
+[EXITO] 1 venta(s) enviada(s) y confirmada(s) por el servidor.
+Descargando catalogo maestro...
+[EXITO] Catalogo actualizado (2 productos recibidos).
+```
+
+---
+
+## 5. Decisiones de Diseño
+
+### 5.1. Servidor Central
+- **Ventas inmutables (Sin `PUT` ni `DELETE`):** En un sistema contable y de auditoría, las ventas son registros de solo adición (*append-only*). No se permite modificar ni borrar una venta realizada. Cualquier corrección o anulación debe registrarse como una transacción compensatoria independiente.
+- **Precio unitario congelado en `SaleDetail`:** Cada detalle de venta almacena el `unit_price` exacto con el que se cobró el producto. Si el precio del artículo cambia en el futuro en la tabla `products`, el histórico de ventas pasadas conserva el valor monetario real original.
+- **Validación de stock acumulado:** Si una venta incluye múltiples líneas del mismo producto (por ejemplo, dos pesajes sucesivos de mercadería fraccionable), el servidor totaliza la cantidad pedida por `product_id` antes de contrastarla contra el inventario disponible.
+- **Idempotencia por `operation_uuid`:** Para evitar duplicación de ventas ante reintentos de red, el servidor consulta por `operation_uuid`. Si la operación ya fue procesada, retorna la fila existente sin volver a descontar stock ni duplicar registros.
+- **Transacción atómica unificada:** Tanto `create_sale` como `create_pending_operation` agrupan la creación de `Sale`, sus `SaleDetail`, el descuento de stock y la confirmación de la operación en una única transacción con un solo `commit()`. Utilizan `db.flush()` intermedio para resolver claves foráneas y `db.rollback()` ante cualquier falla, garantizando consistencia total sin registros a medias.
+
+### 5.2. Terminal de Caja
+- **Fail-Fast en configuración:** Variables críticas como `CASH_REGISTER_ID` y `USER_ID` no poseen valores por defecto. Si faltan en el `.env` o no son enteros válidos, la aplicación falla ruidosamente al inicio antes de operar.
+- **`USER_ID` en v1:** Identifica a la terminal física ante el servidor para permitir operar de forma autónoma sin exigir un login de usuario por sesión que requeriría validar credenciales contra un servidor remoto potencialmente caído.
+- **Precisión monetaria y de peso:** Uso exclusivo de `Decimal` en memoria y persistencia como `String` en SQLite y payloads JSON. El tipo `float` está prohibido para evitar pérdida de centavos y fracciones de gramo.
+- **Transacción atómica única en venta:** El descuento de stock local y la inserción de la `PendingOperation` se realizan en la misma transacción SQLite, con un único `commit()` y `rollback()` explícito ante cualquier excepción.
+- **Protección de catálogo (El problema de la leche):** `download_catalog()` aborta inmediatamente si detecta operaciones en estado `pending` en la cola local. De no hacerlo, el stock del servidor (que aún no computó las ventas locales no sincronizadas) sobreescribiría el stock local con valores ficticios más altos.
+- **Búsqueda explícita de artículos:** Se ingresa directamente el código de barras (`barcode`), o bien `#ID` anteponiendo `#` para artículos sin código (S/C). Esto evita colisiones silenciosas entre códigos de barras numéricos cortos y números de ID.
+- **Unicidad de códigos de barras:** La unicidad de `barcode` (`unique=True`) es garantizada por el modelo en el servidor central (PostgreSQL). Como la base local es una réplica descargada, la caja consulta por `.first()` sin necesidad de redundancias de validación.
+
+---
+
+## 6. Limitaciones Conocidas y Deuda Técnica (v1)
+
+1. **Resolución de conflictos: Gana el primero en llegar al servidor (First-to-Arrive):** Las ventas no se ordenan según el timestamp de ocurrencia (`occurred_at`). Si la Caja A vende a las 14:00 offline y la Caja B vende a las 14:15 online, cuando la Caja B comunique primero consumirá el stock central. Al sincronizar más tarde, la venta de la Caja A será rechazada por el servidor.
+2. **Ventas rechazadas (`rejected`):** Una venta `rejected` significa que la mercadería física ya fue entregada al cliente offline, pero el servidor no pudo asentar la transacción (por falta de stock central o datos inválidos). Requiere conciliación administrativa manual; en v1 no existe resolución automática.
+3. **Peligro al borrar `caja.db` con cola pendiente:** Si la base local se borra mientras contiene operaciones `pending`, esas ventas no existen en ningún otro lugar y se perderán de forma definitiva e irrecuperable.
+4. **Discrepancia de precios offline:** El cajero cobra al cliente el precio del catálogo local al momento de la venta. Si un precio se actualizó en el servidor mientras la caja operaba offline, el servidor registrará la venta con el precio vigente en el servidor al momento de la sincronización. En v2 se resolverá incluyendo el precio unitario pactado dentro del payload de la operación.
+5. **Autenticación preliminar:** El endpoint `/login` verifica contraseñas con bcrypt, pero no emite tokens JWT ni protege los demás endpoints en v1.
+6. **Productos borrados en el servidor:** No se eliminan de la base local en v1 por el costo y complejidad de implementar y auditar un borrado diferencial seguro.
+7. **Concurrencia en chequeo de stock en servidor:** El endpoint no utiliza bloqueo pesimista (`SELECT ... FOR UPDATE`) al verificar `product.stock`, lo que podría generar una condición de carrera si dos terminales sincronizan en el mismo milisegundo.

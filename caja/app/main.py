@@ -266,7 +266,7 @@ def menu_vender(db: Session):
             producto = db.query(Product).filter(Product.barcode == entrada).first()
 
         if not producto:
-            print(f"Producto no encontrado para '{entrada}'. Intente nuevamente.")
+            print(f"Producto no encontrado para '{entrada}'. Buscá por código de barras (ej: 779123456789) o por '#ID' (ej: #4).")
             continue
 
         precio_dec = to_decimal(producto.price)
