@@ -29,29 +29,32 @@ def create_sale(sale: SaleCreate, db:Session = Depends(get_db)):
         detalles_validados.append({
             "product_id": item.product_id,
             "quantity": item.quantity,
-            "unit_price": product.price
+            "unit_price": product.price,
         })
 
-    new_sale = Sale(user_id = sale.user_id, cash_register_id= sale.cash_register_id, total= total, time= datetime.now())
+    new_sale = Sale(user_id=sale.user_id, cash_register_id=sale.cash_register_id, total=total, time=datetime.now())
     db.add(new_sale)
-    db.commit()
+
+    # Flush asigna el id de new_sale sin commitear; los SaleDetail lo necesitan.
+    db.flush()
+
+    try:
+        for detalle in detalles_validados:
+            db.add(SaleDetail(
+                sale_id=new_sale.id,
+                product_id=detalle["product_id"],
+                quantity=detalle["quantity"],
+                unit_price=detalle["unit_price"],
+            ))
+            product = db.query(Product).filter(Product.id == detalle["product_id"]).first()
+            product.stock -= detalle["quantity"]
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error interno al registrar la venta")
+
     db.refresh(new_sale)
-    for detalle in detalles_validados:
-        nuevo_detalle = SaleDetail(
-            sale_id = new_sale.id,
-            product_id = detalle["product_id"],
-            quantity = detalle["quantity"],
-            unit_price = detalle["unit_price"]
-        )
-
-        db.add(nuevo_detalle)
-
-        product = db.query(Product).filter(Product.id == detalle["product_id"]).first()
-
-        product.stock -= detalle["quantity"]
-
-
-    db.commit()
     return new_sale
     
 

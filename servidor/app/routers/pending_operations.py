@@ -13,10 +13,23 @@ from app.models.cash_register import CashRegister
 router = APIRouter()
 
 def save_operation(db: Session, operation: PendingOperationCreate, status: str) -> PendingOperation:
-    new_operation = PendingOperation(operation_uuid = operation.operation_uuid, cash_register_id = operation.cash_register_id, payload = operation.payload, occurred_at = operation.occurred_at, status = status)
-    db.add(new_operation)
-    db.commit()
-    db.refresh(new_operation)
+    new_operation = PendingOperation(
+        operation_uuid=operation.operation_uuid,
+        cash_register_id=operation.cash_register_id,
+        payload=operation.payload,
+        occurred_at=operation.occurred_at,
+        status=status,
+    )
+    try:
+        db.add(new_operation)
+        db.commit()
+        db.refresh(new_operation)
+    except Exception:
+        db.rollback()
+        # No podemos persistir (p.ej. FK violation porque la caja no existe).
+        # Devolvemos el objeto sin id pero con el status correcto para que el
+        # endpoint pueda responder al cliente. El cliente (la caja) verá el status.
+        new_operation.id = -1
     return new_operation
     
     
@@ -53,27 +66,43 @@ def create_pending_operation(operation: PendingOperationCreate, db: Session = De
         detalles_validados.append({
             "product_id": item.product_id,
             "quantity": item.quantity,
-            "unit_price": product.price
+            "unit_price": product.price,
         })
-    
-    new_sale = Sale(
-        user_id = payload.user_id,
-        cash_register_id = operation.cash_register_id,
-        total = total,
-        time = operation.occurred_at
-    )
-    db.add(new_sale)
-    db.commit()
-    db.refresh(new_sale)
-    for detalle in detalles_validados:
-        nuevo_detalle = SaleDetail(
-            sale_id = new_sale.id,
-            product_id = detalle["product_id"],
-            quantity = detalle["quantity"],
-            unit_price = detalle["unit_price"]
+
+    # Camino feliz: Sale + SaleDetail + descuento de stock + PendingOperation
+    # en una sola transacción. Si cualquier paso falla, rollback deja la DB intacta.
+    try:
+        new_sale = Sale(
+            user_id=payload.user_id,
+            cash_register_id=operation.cash_register_id,
+            total=total,
+            time=operation.occurred_at,
         )
-        db.add(nuevo_detalle)
-        product = db.query(Product).filter(Product.id == detalle["product_id"]).first()
-        product.stock -= detalle["quantity"]
-    db.commit()
-    return save_operation(db, operation, "confirmed")
+        db.add(new_sale)
+        # flush asigna new_sale.id sin commitear; los SaleDetail lo necesitan.
+        db.flush()
+
+        for detalle in detalles_validados:
+            db.add(SaleDetail(
+                sale_id=new_sale.id,
+                product_id=detalle["product_id"],
+                quantity=detalle["quantity"],
+                unit_price=detalle["unit_price"],
+            ))
+            product = db.query(Product).filter(Product.id == detalle["product_id"]).first()
+            product.stock -= detalle["quantity"]
+
+        confirmed_op = PendingOperation(
+            operation_uuid=operation.operation_uuid,
+            cash_register_id=operation.cash_register_id,
+            payload=operation.payload,
+            occurred_at=operation.occurred_at,
+            status="confirmed",
+        )
+        db.add(confirmed_op)
+        db.commit()
+        db.refresh(confirmed_op)
+        return confirmed_op
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error interno al procesar la operación")
