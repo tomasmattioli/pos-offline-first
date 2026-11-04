@@ -128,26 +128,13 @@ Este proyecto resuelve ese problema mediante una arquitectura **Offline-First**:
     La documentación interactiva de Swagger quedará disponible en: `http://127.0.0.1:8000/docs`.
 
 7. **Primer uso — Carga inicial de datos:**
-   Antes de que la caja pueda operar, el servidor debe tener registrados al menos un usuario, una terminal de caja y productos en catálogo. Se pueden crear directamente desde la interfaz `/docs` (Swagger) o ejecutando un script en la consola de Python:
+   Antes de que la caja pueda operar, el servidor debe tener registrados al menos un usuario, una terminal de caja y productos en catálogo. Ejecutá el script incluido en el repo:
    ```bash
-   python -c "
-   from app.database import SessionLocal
-   from app.models.user import User
-   from app.models.cash_register import CashRegister
-   from app.models.product import Product
-   from decimal import Decimal
-
-   db = SessionLocal()
-   u = User(name='Cajero 1', username='cajero1', password_hash='hash')
-   c = CashRegister(name='Caja Principal')
-   p1 = Product(name='Leche Entera 1L', price=Decimal('150.00'), stock=Decimal('50.000'), barcode='779123456789')
-   p2 = Product(name='Pan Criollo (kg)', price=Decimal('80.00'), stock=Decimal('20.000'), barcode=None)
-   db.add_all([u, c, p1, p2])
-   db.commit()
-   print(f'Creados: User ID={u.id}, CashRegister ID={c.id}, Productos ID={p1.id}, {p2.id}')
-   db.close()
-   "
+   python scripts/seed.py
    ```
+   El script crea un usuario (`tomas`), una caja (`Caja Principal`) y cuatro productos de ejemplo con sus códigos de barras. Si ya existen datos, falla con un mensaje claro en lugar de duplicar registros.
+
+   > **Nota:** `password_hash` en el seed es un placeholder. En producción reemplazarlo con un hash bcrypt real antes de usar el endpoint `/login`.
 
 8. **Ejecutar tests automatizados con pytest:**
    El servidor cuenta con una suite completa de pruebas de integración con aislamiento transaccional (`SAVEPOINT`):
