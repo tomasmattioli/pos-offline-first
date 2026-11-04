@@ -31,6 +31,15 @@ from app.models.pendig_operation import PendingOperation  # typo original conser
 
 TEST_DB_URL = "postgresql://postgres:usuario@localhost:5432/pos_central_test"
 
+# Protección contra apuntar accidentalmente a la base de producción.
+# Si alguien cambia TEST_DB_URL por una URL sin el sufijo _test, pytest falla
+# ruidosamente antes de crear ni borrar ninguna tabla.
+_db_name = TEST_DB_URL.rsplit("/", 1)[-1]
+assert _db_name.endswith("_test"), (
+    f"TEST_DB_URL apunta a '{_db_name}'. "
+    "La base de test debe terminar en '_test' para evitar borrar datos reales."
+)
+
 engine_test = create_engine(TEST_DB_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine_test)
 
