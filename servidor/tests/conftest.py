@@ -12,6 +12,7 @@ Estrategia de aislamiento:
     que apunta a esa transacción de test.
 """
 
+import os
 import pytest
 from decimal import Decimal
 from sqlalchemy import create_engine, text
@@ -29,10 +30,15 @@ from app.models.sale import Sale
 from app.models.sale_detail import SaleDetail
 from app.models.pendig_operation import PendingOperation  # typo original conservado
 
-TEST_DB_URL = "postgresql://postgres:usuario@localhost:5432/pos_central_test"
+TEST_DB_URL = os.environ.get("TEST_DB_URL")
+if not TEST_DB_URL:
+    raise RuntimeError(
+        "Variable de entorno TEST_DB_URL no definida. "
+        "Ejemplo: TEST_DB_URL=postgresql://postgres:usuario@localhost:5432/pos_central_test"
+    )
 
 # Protección contra apuntar accidentalmente a la base de producción.
-# Si alguien cambia TEST_DB_URL por una URL sin el sufijo _test, pytest falla
+# Si alguien configura TEST_DB_URL con una URL sin el sufijo _test, pytest falla
 # ruidosamente antes de crear ni borrar ninguna tabla.
 _db_name = TEST_DB_URL.rsplit("/", 1)[-1]
 assert _db_name.endswith("_test"), (

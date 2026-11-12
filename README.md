@@ -142,9 +142,16 @@ Este proyecto resuelve ese problema mediante una arquitectura **Offline-First**:
    # 1. Crear la base de test si aún no existe
    python tests/create_test_db.py
 
-   # 2. Correr los tests
+   # 2. Definir la variable de entorno con la URL de la base de test
+   # Linux / macOS:
+   export TEST_DB_URL=postgresql://postgres:tu_password@localhost:5432/pos_central_test
+   # Windows PowerShell:
+   $env:TEST_DB_URL="postgresql://postgres:tu_password@localhost:5432/pos_central_test"
+
+   # 3. Correr los tests
    pytest tests/ -v
    ```
+   > **Nota:** `TEST_DB_URL` es obligatoria y debe apuntar a una base que termine en `_test`. Si falta o apunta a producción, pytest aborta antes de tocar cualquier tabla.
 
 ---
 

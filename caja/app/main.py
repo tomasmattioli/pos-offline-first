@@ -49,9 +49,12 @@ def leer_decimal(mensaje: str, mayor_a_cero: bool = False, max_decimales: int = 
             print("Error: la cantidad debe ser mayor a 0.")
             continue
 
-        # Normalizar ceros finales redundantes (ej: 0.7500 -> 0.75) para evaluar exponente
-        valor_norm = valor.normalize() if valor != Decimal(0) else valor
-        if valor_norm.as_tuple().exponent < -max_decimales:
+        # Verificar cantidad de decimales directamente desde el valor ingresado.
+        # as_tuple().exponent devuelve cuántos decimales tiene el literal tal cual
+        # se escribió (ej: "1.500" → -3, "2" → 0). No normalizamos para no
+        # alterar la representación original ni introducir exponentes positivos.
+        _, _, exp = valor.as_tuple()
+        if isinstance(exp, int) and exp < -max_decimales:
             print(f"Error: la cantidad no puede tener más de {max_decimales} decimales (ej: 0.250).")
             continue
 
@@ -122,12 +125,15 @@ def menu_ver_cola(db: Session):
     print(f"{'ID':<5} {'Hora Local':<20} {'Estado':<18} {'Ítems':<8} {'UUID (primeros 8)'}")
     print("-" * 80)
     for op in operaciones:
-        # Convertir timestamp ISO en UTC a la zona horaria local de la caja
-        try:
-            dt_local = datetime.fromisoformat(op.occurred_at).astimezone()
-            fecha_legible = dt_local.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            fecha_legible = op.occurred_at[:19] if op.occurred_at else "Fecha corrupta"
+        # Convertir timestamp ISO a hora local. Si el valor es None, está
+        # corrupto o tiene un formato inesperado, se muestra un fallback seguro.
+        fecha_legible = "Fecha no disponible"
+        if op.occurred_at:
+            try:
+                dt_local = datetime.fromisoformat(op.occurred_at).astimezone()
+                fecha_legible = dt_local.strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError):
+                fecha_legible = str(op.occurred_at)[:19]
 
         # Extraer cantidad de ítems del payload
         try:
