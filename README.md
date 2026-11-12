@@ -194,46 +194,117 @@ Este proyecto resuelve ese problema mediante una arquitectura **Offline-First**:
 
 6. **Primer arranque:** En el menú principal, seleccionar la opción `1. Sincronizar catálogo` para descargar el catálogo maestro de productos y stock desde el servidor central.
 
+### Demostración de Operación Offline y Sincronización
+
+![demo](docs/demo.gif)
+
 ### Ejemplo de uso de la CLI (Terminal de Caja)
 
 ```text
-========================================
-       TERMINAL DE CAJA (CLI)
-========================================
-[1] Sincronizar catalogo
-[2] Registrar venta
-[3] Ver cola de operaciones pendientes
-[4] Salir
-Seleccione una opcion: 2
+=== SISTEMA DE CAJA (POS OFFLINE-FIRST) ===
+1. Sincronizar
+2. Ver catálogo
+3. Vender
+4. Ver cola
+5. Salir
 
---- REGISTRAR VENTA ---
-Ingrese codigo de barras o #ID (Enter vacio para finalizar): 779123456789
-  Producto : Leche Entera 1L
-  Precio   : $150.00
-  Stock    : 50.000
-  Cantidad : 2
-  -> Agregado: 2.000 x Leche Entera 1L ($300.00)
+Seleccione una opción (1-5): 1
 
-Ingrese codigo de barras o #ID (Enter vacio para finalizar): 
---- RESUMEN DE LA VENTA ---
-  2.000 x Leche Entera 1L ($150.00 c/u) = $300.00
-----------------------------------------
-TOTAL: $300.00
-----------------------------------------
-Confirmar venta? (s/n): s
-[EXITO] Venta registrada correctamente. Operacion guardada en cola local.
+--- INICIANDO SINCRONIZACIÓN ---
+[INFO] No hay operaciones pendientes en la cola local.
+[1/1] Descargando catálogo actualizado desde el servidor...
+[sync] Catálogo sincronizado: 4 productos.
 
-Seleccione una opcion: 3
---- OPERACIONES PENDIENTES ---
-  UUID: 4e99f... | Fecha: 2026-10-26 18:00:00 | Items: 1
-Total en cola: 1 operacion(es) pendiente(s).
+[ÉXITO] Catálogo actualizado correctamente.
 
-Seleccione una opcion: 1
---- SINCRONIZACION ---
-Enviando ventas pendientes al servidor...
-[EXITO] 1 venta(s) enviada(s) y confirmada(s) por el servidor.
-Descargando catalogo maestro...
-[EXITO] Catalogo actualizado (2 productos recibidos).
+=== SISTEMA DE CAJA (POS OFFLINE-FIRST) ===
+1. Sincronizar
+2. Ver catálogo
+3. Vender
+4. Ver cola
+5. Salir
+
+Seleccione una opción (1-5): 3
+
+--- NUEVA VENTA ---
+Ingrese código de barras directamente, o '#ID' para buscar por ID.
+Presione Enter sin texto o escriba 'FIN' para finalizar la carga.
+
+Código de barras o #ID (o FIN para terminar): #4
+-> Encontrado: Pan Criollo (kg) (ID 4) | Precio: $90.00 | Stock local: 15.000
+   Cantidad a vender: 1
+   [+] Agregado: Pan Criollo (kg) x 1.000
+
+Código de barras o #ID (o FIN para terminar): FIN
+
+=================================================================
+RESUMEN DE LA VENTA
+-----------------------------------------------------------------
+Producto                       Cantidad     Precio Unit. Subtotal
+-----------------------------------------------------------------
+Pan Criollo (kg)               1.000        $90.00       $90.00
+-----------------------------------------------------------------
+TOTAL A COBRAR:                                         $90.00
+=================================================================
+
+¿Confirmar venta y descontar stock? (s/n): s
+
+[ÉXITO] Venta registrada con éxito.
+Venta encolada con UUID: eca41114-885b-4584-a7c8-e142baade794 (Estado: pending)
+
+=== SISTEMA DE CAJA (POS OFFLINE-FIRST) ===
+1. Sincronizar
+2. Ver catálogo
+3. Vender
+4. Ver cola
+5. Salir
+
+Seleccione una opción (1-5): 4
+
+================================================================================
+ID    Hora Local           Estado             Ítems    UUID (primeros 8)
+--------------------------------------------------------------------------------
+1     2026-11-04 17:34:06  pending            1        eca41114
+================================================================================
+
+=== SISTEMA DE CAJA (POS OFFLINE-FIRST) ===
+1. Sincronizar
+2. Ver catálogo
+3. Vender
+4. Ver cola
+5. Salir
+
+Seleccione una opción (1-5): 1
+
+--- INICIANDO SINCRONIZACIÓN ---
+[1/2] Enviando 1 operación(es) pendiente(s) al servidor...
+
+--- RESUMEN DE COLA PROCESADA ---
+Operaciones enviadas en esta sincronización: 1
+  - Confirmadas: 0
+  - Rechazadas por servidor: 1
+  - Error de formato (422): 0
+
+[2/2] Descargando catálogo actualizado desde el servidor...
+[sync] Catálogo sincronizado: 4 productos.
+
+[ÉXITO] Sincronización completada.
+- Catálogo local actualizado exitosamente con los precios y stock del servidor.
+
+=== SISTEMA DE CAJA (POS OFFLINE-FIRST) ===
+1. Sincronizar
+2. Ver catálogo
+3. Vender
+4. Ver cola
+5. Salir
+
+Seleccione una opción (1-5): 4
+
+================================================================================
+ID    Hora Local           Estado             Ítems    UUID (primeros 8)
+--------------------------------------------------------------------------------
+1     2026-11-04 17:34:06  rejected           1        eca41114
+================================================================================
 ```
 
 ---
